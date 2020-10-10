@@ -230,6 +230,7 @@ files = [
     "matrixprocessmodule.c",
     "harmonizermodule.c",
     "chorusmodule.c",
+    "MedianFilter.c"
 ] + obj_files
 
 if compile_externals:

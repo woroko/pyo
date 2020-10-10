@@ -2358,6 +2358,7 @@ init_pyo64(void)
     module_add_object(m, "SVF_base", &SVFType);
     module_add_object(m, "SVF2_base", &SVF2Type);
     module_add_object(m, "Average_base", &AverageType);
+	module_add_object(m, "Median_base", &MedianType); // median filter
     module_add_object(m, "CvlVerb_base", &CvlVerbType);
     module_add_object(m, "Spectrum_base", &SpectrumType);
     module_add_object(m, "Reson_base", &ResonType);

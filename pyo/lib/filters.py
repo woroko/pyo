@@ -3485,6 +3485,94 @@ class SVF2(PyoObject):
         self.setOrder(x)
 
 
+class Median(PyoObject):
+    """
+    Moving median filter.
+
+    As the name implies, the moving median filter operates by calculating the median of a number
+    of points from the input signal to produce each point in the output signal.
+    In spite of its simplicity, the moving median filter is optimal for
+    a common task: reducing or removing large spikes in the data entirely, 
+    while retaining a sharper step response than even the Average filter.
+
+    :Parent: :py:class:`PyoObject`
+
+    :Args:
+
+        input: PyoObject
+            Input signal to process.
+        size: int, optional
+            Filter kernel size, which is the number of samples used in the
+            moving median. Default to 10.
+
+    >>> s = Server().boot()
+    >>> s.start()
+    >>> a = Noise(.025)
+    >>> b = Sine(250, mul=0.3)
+    >>> c = Median(a+b, size=100).out()
+
+    """
+    def __init__(self, input, size=10, mul=1, add=0):
+        pyoArgsAssert(self, "oiOO", input, size, mul, add)
+        PyoObject.__init__(self, mul, add)
+        self._input = input
+        self._size = size
+        self._in_fader = InputFader(input)
+        in_fader, size, mul, add, lmax = convertArgsToLists(self._in_fader, size, mul, add)
+        self._base_objs = [Median_base(wrap(in_fader,i), wrap(size,i), wrap(mul,i), wrap(add,i)) for i in range(lmax)]
+        self._init_play()
+
+    def setInput(self, x, fadetime=0.05):
+        """
+        Replace the `input` attribute.
+
+        :Args:
+
+            x: PyoObject
+                New signal to process.
+            fadetime: float, optional
+                Crossfade time between old and new input. Default to 0.05.
+
+        """
+        pyoArgsAssert(self, "oN", x, fadetime)
+        self._input = x
+        self._in_fader.setInput(x, fadetime)
+
+    def setSize(self, x):
+        """
+        Replace the `size` attribute.
+
+        :Args:
+
+            x: int
+                New `size` attribute.
+
+        """
+        pyoArgsAssert(self, "i", x)
+        self._size = x
+        x, lmax = convertArgsToLists(x)
+        [obj.setSize(wrap(x,i)) for i, obj in enumerate(self._base_objs)]
+
+    def ctrl(self, map_list=None, title=None, wxnoserver=False):
+        self._map_list = [SLMap(2, 256, 'lin', 'size', self._size, res="int", dataOnly=True),
+                          SLMapMul(self._mul)]
+        PyoObject.ctrl(self, map_list, title, wxnoserver)
+
+    @property
+    def input(self):
+        """PyoObject. Input signal to process."""
+        return self._input
+    @input.setter
+    def input(self, x): self.setInput(x)
+
+    @property
+    def size(self):
+        """int. Filter kernel size in samples."""
+        return self._size
+    @size.setter
+    def size(self, x): self.setSize(x)
+
+
 class Average(PyoObject):
     """
     Moving average filter.

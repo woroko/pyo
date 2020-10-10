@@ -466,6 +466,7 @@ extern PyTypeObject YinType;
 extern PyTypeObject SVFType;
 extern PyTypeObject SVF2Type;
 extern PyTypeObject AverageType;
+extern PyTypeObject MedianType; // median filter
 extern PyTypeObject CvlVerbType;
 extern PyTypeObject SpectrumType;
 extern PyTypeObject ResonType;
