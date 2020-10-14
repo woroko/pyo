@@ -1357,6 +1357,12 @@ quadraticInterpolation(MYFLT *buf, int period, int size)
 /************/
 /* Yin */
 /************/
+#define PITCH_TRUSTED 2
+#define JUMP_REJECTED 3
+#define OCTAVE_REJECTED 5
+inline int min(int a, int b) {
+    return a < b ? a : b;
+}
 typedef struct
 {
     pyo_audio_HEAD
@@ -1368,6 +1374,13 @@ typedef struct
     int halfsize;
     int input_count;
     MYFLT tolerance;
+    MYFLT confidence;
+    MYFLT minconfidence;
+    MYFLT octave_error_threshold;
+    MYFLT jump_error_threshold;
+    int error_rejected_count;
+    int jump_rejected_count;
+    int pitch_trusted_count;
     MYFLT pitch;
     MYFLT minfreq;
     MYFLT maxfreq;
@@ -1381,7 +1394,7 @@ typedef struct
 static void
 Yin_process(Yin *self)
 {
-    int i, j, period, tau = 0;
+    int i, j, period, tau, minimum_period = 0;
     MYFLT candidate, tmp = 0.0, tmp2 = 0.0;
     MYFLT *in = Stream_getData((Stream *)self->input_stream);
 
@@ -1425,18 +1438,44 @@ Yin_process(Yin *self)
                         (self->yin_buffer[period] < self->yin_buffer[period + 1]))
                 {
                     candidate = quadraticInterpolation(self->yin_buffer, period, self->halfsize);
+                    self->confidence = 1.0 - self->yin_buffer[period];
                     goto founded;
                 }
             }
 
-            candidate = quadraticInterpolation(self->yin_buffer, min_elem_pos(self->yin_buffer, self->halfsize), self->halfsize);
+            minimum_period = min_elem_pos(self->yin_buffer, self->halfsize);
+            self->confidence = 1.0 - self->yin_buffer[minimum_period];
+            candidate = quadraticInterpolation(self->yin_buffer, minimum_period, self->halfsize);
 
 founded:
-
             candidate = self->sr / candidate;
 
-            if (candidate > self->minfreq && candidate < self->maxfreq)
-                self->pitch = candidate;
+            if (candidate > self->minfreq && candidate < self->maxfreq && self->confidence > self->minconfidence) {
+                if ((abs(self->pitch - 2.0*candidate)/(2.0*candidate) < self->octave_error_threshold ||
+                    abs(self->pitch - 4.0*candidate)/(4.0*candidate) < self->octave_error_threshold) && self->error_rejected_count < OCTAVE_REJECTED
+                    && self->pitch_trusted_count >= PITCH_TRUSTED) {  // one or two octaves below last pitch, possibly an error
+                    self->error_rejected_count++;
+                }
+                else if ((abs(self->pitch - 0.5*candidate)/(0.5*candidate) < self->octave_error_threshold ||
+                    abs(self->pitch - 0.25*candidate)/(0.25*candidate) < self->octave_error_threshold) && self->error_rejected_count < OCTAVE_REJECTED
+                    && self->pitch_trusted_count >= PITCH_TRUSTED) { // one or two octaves above the last pitch, possibly an error
+                    self->error_rejected_count++;
+                }
+                else if (abs(self->pitch - candidate)/candidate > self->jump_error_threshold && self->jump_rejected_count < JUMP_REJECTED
+                    && self->pitch_trusted_count >= PITCH_TRUSTED) {  // very large jump, possibly a glitch
+                    self->jump_rejected_count++;
+                }
+                else {
+                    self->pitch = candidate;
+                    self->error_rejected_count = 0;
+                    self->jump_rejected_count = 0;
+                    self->pitch_trusted_count = min(PITCH_TRUSTED+100, self->pitch_trusted_count + 1);
+                }
+
+                if (self->error_rejected_count >= OCTAVE_REJECTED || self->jump_rejected_count >= JUMP_REJECTED) {  // pitch will be set next time
+                    self->pitch_trusted_count = 0;
+                }
+            }
 
         }
 
@@ -1548,8 +1587,10 @@ Yin_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
     self->winsize = 1024;
     self->halfsize = 512;
     self->input_count = 0;
-    self->pitch = 0.;
+    self->pitch = 440.;
     self->tolerance = 0.15;
+    self->minconfidence = 0.5;
+    self->confidence = 0.0;
     self->minfreq = 40;
     self->maxfreq = 1000;
     self->cutoff = 1000;
@@ -1558,13 +1599,19 @@ Yin_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
     self->modebuffer[0] = 0;
     self->modebuffer[1] = 0;
 
+    self->octave_error_threshold = 0.2;
+    self->error_rejected_count = 0;
+    self->jump_rejected_count = 0;
+    self->jump_error_threshold = 0.3;
+    self->pitch_trusted_count = 0;
+
     INIT_OBJECT_COMMON
     Stream_setFunctionPtr(self->stream, Yin_compute_next_data_frame);
     self->mode_func_ptr = Yin_setProcMode;
 
-    static char *kwlist[] = {"input", "tolerance", "minfreq", "maxfreq", "cutoff", "winsize", "mul", "add", NULL};
+    static char *kwlist[] = {"input", "tolerance", "minconfidence", "minfreq", "maxfreq", "cutoff", "winsize", "mul", "add", NULL};
 
-    if (! PyArg_ParseTupleAndKeywords(args, kwds, TYPE_O_FFFFIOO, kwlist, &inputtmp, &self->tolerance, &self->minfreq, &self->maxfreq, &self->cutoff, &self->winsize, &multmp, &addtmp))
+    if (! PyArg_ParseTupleAndKeywords(args, kwds, TYPE_O_FFFFFIOO, kwlist, &inputtmp, &self->tolerance, &self->minconfidence, &self->minfreq, &self->maxfreq, &self->cutoff, &self->winsize, &multmp, &addtmp))
         Py_RETURN_NONE;
 
     INIT_INPUT_STREAM
@@ -1635,6 +1682,21 @@ Yin_setTolerance(Yin *self, PyObject *arg)
 }
 
 static PyObject *
+Yin_setMinconfidence(Yin *self, PyObject *arg)
+{
+    ASSERT_ARG_NOT_NULL
+
+    int isNumber = PyNumber_Check(arg);
+
+    if (isNumber == 1)
+    {
+        self->minconfidence= PyFloat_AsDouble(arg);
+    }
+
+    Py_RETURN_NONE;
+}
+
+static PyObject *
 Yin_setMinfreq(Yin *self, PyObject *arg)
 {
     ASSERT_ARG_NOT_NULL
@@ -1696,6 +1758,7 @@ static PyMethodDef Yin_methods[] =
     {"play", (PyCFunction)Yin_play, METH_VARARGS | METH_KEYWORDS, "Starts computing without sending sound to soundcard."},
     {"stop", (PyCFunction)Yin_stop, METH_VARARGS | METH_KEYWORDS, "Stops computing."},
     {"setTolerance", (PyCFunction)Yin_setTolerance, METH_O, "Sets the tolerance factor."},
+    {"setMinconfidence", (PyCFunction)Yin_setMinconfidence, METH_O, "Sets the minimum confidence for a pitch change."},
     {"setMinfreq", (PyCFunction)Yin_setMinfreq, METH_O, "Sets the minimum frequency in output."},
     {"setMaxfreq", (PyCFunction)Yin_setMaxfreq, METH_O, "Sets the maximum frequency in output."},
     {"setCutoff", (PyCFunction)Yin_setCutoff, METH_O, "Sets the input lowpass filter cutoff frequency."},

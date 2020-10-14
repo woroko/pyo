@@ -384,6 +384,8 @@ class Yin(PyoObject):
             Input signal to process.
         tolerance: float, optional
             Parameter for minima selection, between 0 and 1. Defaults to 0.2.
+        minconfidence: float, optional
+            Minimum confidence required for a pitch change, between 0 and 1.
         minfreq: float, optional
             Minimum estimated frequency in Hz. Frequency below this threshold will
             be ignored. Defaults to 40.
@@ -414,22 +416,24 @@ class Yin(PyoObject):
 
     """
 
-    def __init__(self, input, tolerance=0.2, minfreq=40, maxfreq=1000, cutoff=1000, winsize=1024, mul=1, add=0):
-        pyoArgsAssert(self, "onnnniOO", input, tolerance, minfreq, maxfreq, cutoff, winsize, mul, add)
+    def __init__(self, input, tolerance=0.2, minconfidence=0.5, minfreq=40, maxfreq=1000, cutoff=1000, winsize=1024, mul=1, add=0):
+        pyoArgsAssert(self, "onnnnniOO", input, tolerance, minconfidence, minfreq, maxfreq, cutoff, winsize, mul, add)
         PyoObject.__init__(self, mul, add)
         self._input = input
         self._tolerance = tolerance
+        self._minconfidence = minconfidence
         self._minfreq = minfreq
         self._maxfreq = maxfreq
         self._cutoff = cutoff
         self._in_fader = InputFader(input)
-        in_fader, tolerance, minfreq, maxfreq, cutoff, winsize, mul, add, lmax = convertArgsToLists(
-            self._in_fader, tolerance, minfreq, maxfreq, cutoff, winsize, mul, add
+        in_fader, tolerance, minconfidence, minfreq, maxfreq, cutoff, winsize, mul, add, lmax = convertArgsToLists(
+            self._in_fader, tolerance, minconfidence, minfreq, maxfreq, cutoff, winsize, mul, add
         )
         self._base_objs = [
             Yin_base(
                 wrap(in_fader, i),
                 wrap(tolerance, i),
+                wrap(minconfidence, i),
                 wrap(minfreq, i),
                 wrap(maxfreq, i),
                 wrap(cutoff, i),
@@ -471,6 +475,21 @@ class Yin(PyoObject):
         self._tolerance = x
         x, lmax = convertArgsToLists(x)
         [obj.setTolerance(wrap(x, i)) for i, obj in enumerate(self._base_objs)]
+
+    def setMinconfidence(self, x):
+        """
+        Replace the `minconfidence` attribute.
+
+        :Args:
+
+            x: float
+                New parameter for minimum confidence, between 0 and 1.
+
+        """
+        pyoArgsAssert(self, "n", x)
+        self._minconfidence = x
+        x, lmax = convertArgsToLists(x)
+        [obj.setMinconfidence(wrap(x, i)) for i, obj in enumerate(self._base_objs)]
 
     def setMinfreq(self, x):
         """
@@ -546,6 +565,15 @@ class Yin(PyoObject):
     @tolerance.setter
     def tolerance(self, x):
         self.setTolerance(x)
+
+    @property
+    def minconfidence(self):
+        """float. Minimum confidence for pitch change."""
+        return self._minconfidence
+
+    @minconfidence.setter
+    def minconfidence(self, x):
+        self.setMinconfidence(x)
 
     @property
     def minfreq(self):
