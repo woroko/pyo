@@ -127,7 +127,7 @@ if "--fast-compile" in sys.argv:
     sys.argv.remove("--fast-compile")
     oflag = ["-O0"]
 else:
-    oflag = ["-O3"]
+    oflag = ["-O3", "-march=native", "-mtune=native", "-fopt-info-vec-optimized"]
 
 # Specific audio drivers source files to compile
 ad_files = []
@@ -368,14 +368,14 @@ if compile_externals:
 soundfiles = [f for f in os.listdir(os.path.join("pyo", "lib", "snds")) if f[-3:] in ["aif", "wav"]]
 short_desc = "Python module to build digital signal processing program."
 long_desc = """
-pyo is a Python module containing classes for a wide variety of audio signal processing types. 
-With pyo, user will be able to include signal processing chains directly in Python scripts or 
-projects, and to manipulate them in real time through the interpreter. Tools in pyo module offer 
-primitives, like mathematical operations on audio signal, basic signal processing (filters, 
-delays, synthesis generators, etc.), but also complex algorithms to create sound granulation 
-and others creative audio manipulations. pyo supports OSC protocol (Open Sound Control), to ease 
-communications between softwares, and MIDI protocol, for generating sound events and controlling 
-process parameters. pyo allows creation of sophisticated signal processing chains with all the 
+pyo is a Python module containing classes for a wide variety of audio signal processing types.
+With pyo, user will be able to include signal processing chains directly in Python scripts or
+projects, and to manipulate them in real time through the interpreter. Tools in pyo module offer
+primitives, like mathematical operations on audio signal, basic signal processing (filters,
+delays, synthesis generators, etc.), but also complex algorithms to create sound granulation
+and others creative audio manipulations. pyo supports OSC protocol (Open Sound Control), to ease
+communications between softwares, and MIDI protocol, for generating sound events and controlling
+process parameters. pyo allows creation of sophisticated signal processing chains with all the
 benefits of a mature, and widely used, general programming language.
 """
 
