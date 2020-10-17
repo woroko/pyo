@@ -37,10 +37,21 @@ typedef struct
     Stream *input_stream;
     PyObject *transpo;
     Stream *transpo_stream;
+    PyObject *input_pitch;
+    Stream *input_pitch_stream;
     PyObject *feedback;
     Stream *feedback_stream;
     MYFLT winsize;
     MYFLT pointerPos;
+    MYFLT winsize1;
+    MYFLT winsize2;
+    MYFLT prev_winsize1;
+    MYFLT prev_winsize2;
+    MYFLT target_winsize1;
+    MYFLT target_winsize2;
+    int samples_since_winsize1_changed;
+    int samples_since_winsize2_changed;
+    int second_overlap_hit;
     // feedback dc blocker
     MYFLT x1;
     MYFLT y1;
@@ -135,11 +146,12 @@ Harmonizer_transform_ii(Harmonizer *self)
 static void
 Harmonizer_transform_ai(Harmonizer *self)
 {
-    MYFLT val, amp, inc, ratio, rate, del, xind, pos, envpos, fpart;
+    MYFLT val, amp, inc, ratio, rate, del, xind1, xind2, pos, envpos, fpart, window_offset_greater, window_offset_smaller, window_offset;
     int i, ipart;
 
     MYFLT *in = Stream_getData((Stream *)self->input_stream);
     MYFLT *trans = Stream_getData((Stream *)self->transpo_stream);
+    MYFLT *input_pitch = Stream_getData((Stream *)self->input_pitch_stream);
     MYFLT feed = PyFloat_AS_DOUBLE(self->feedback);
 
     if (feed < 0.0)
@@ -147,14 +159,23 @@ Harmonizer_transform_ai(Harmonizer *self)
     else if (feed > 1.0)
         feed = 1.0;
 
-    MYFLT oneOnWinsize = 1.0 / self->winsize;
     MYFLT oneOnSr = 1.0 / self->sr;
-
+    MYFLT oneOnWinsize;
+    MYFLT winsizeFactor;
     for (i = 0; i < self->bufsize; i++)
     {
+        winsizeFactor = ((self->samples_since_winsize1_changed / self->sr) / self->winsize) * 0.5;
+        winsizeFactor = winsizeFactor > 1.0 ? 1.0 : winsizeFactor;
+        self->winsize1 =  self->target_winsize1 * winsizeFactor + (1.0-winsizeFactor) * self->prev_winsize1;
+        winsizeFactor = ((self->samples_since_winsize2_changed / self->sr) / self->winsize) * 0.5;
+        winsizeFactor = winsizeFactor > 1.0 ? 1.0 : winsizeFactor;
+        self->winsize2 =  self->target_winsize2 * winsizeFactor + (1.0-winsizeFactor) * self->prev_winsize2;
+
+        oneOnWinsize = ((1.0 / self->winsize1) + (1.0 / self->winsize2)) / 2.0;
         ratio = MYPOW(2.0, trans[i] / 12.0);
         rate = (ratio - 1.0) * oneOnWinsize;
-        inc = -rate * oneOnSr;;
+        inc = -rate * oneOnSr;
+
 
         /* first overlap */
         pos = self->pointerPos;
@@ -163,45 +184,90 @@ Harmonizer_transform_ai(Harmonizer *self)
         fpart = envpos - ipart;
         amp = ENVELOPE[ipart] + (ENVELOPE[ipart + 1] - ENVELOPE[ipart]) * fpart;
 
-        del = pos * self->winsize;
-        xind = self->in_count - (del * self->sr);
+        del = pos * self->winsize1; // pointerOffset1 in seconds
+        xind1 = self->in_count - (del * self->sr);
 
-        if (xind < 0)
-            xind += self->sr;
+        if (xind1 < 0)
+            xind1 += self->sr;
 
-        ipart = (int)xind;
-        fpart = xind - ipart;
+        ipart = (int)xind1;
+        fpart = xind1 - ipart;
         val = self->buffer[ipart] + (self->buffer[ipart + 1] - self->buffer[ipart]) * fpart;
         self->data[i] = val * amp;
 
         /* second overlap */
         pos = self->pointerPos + 0.5;
 
-        if (pos >= 1)
-            pos -= 1.0;
+        if (pos >= 1) {  // second is silent
+            pos -= 1.0; // jump from past to present
+            if (self->second_overlap_hit == 0 || self->second_overlap_hit == -1) {  // first time second overlap hits edge / is silent
+                if (input_pitch[i] > 20.0) {
+                    self->prev_winsize2 = self->winsize2;
+                    self->samples_since_winsize2_changed = 0;
+                    self->target_winsize2 = self->target_winsize1;
+                }
+                self->second_overlap_hit = 1;
+            }
+        }
+        else {
+            if (self->second_overlap_hit == 1 || self->second_overlap_hit == -1) { // pos is coming back down below 1.0, causing a jump from pos=0 (the present, (because of pos-=1.0) to pos=1 (the past)
+                if (input_pitch[i] > 20.0) {
+                    self->prev_winsize2 = self->winsize2;
+                    self->samples_since_winsize2_changed = 0;
+                    self->target_winsize2 = self->target_winsize1;
+                }
+                self->second_overlap_hit = 0;
+            }
+        }
 
         envpos = pos * 8192.0;
         ipart = (int)envpos;
         fpart = envpos - ipart;
         amp = ENVELOPE[ipart] + (ENVELOPE[ipart + 1] - ENVELOPE[ipart]) * fpart;
 
-        del = pos * self->winsize;
-        xind = self->in_count - (del * self->sr);
+        del = pos * self->winsize2; // pointerOffset1 in seconds
+        xind2 = self->in_count - (del * self->sr);
 
-        if (xind < 0)
-            xind += self->sr;
+        if (xind2 < 0)
+            xind2 += self->sr;
 
-        ipart = (int)xind;
-        fpart = xind - ipart;
+        ipart = (int)xind2;
+        fpart = xind2 - ipart;
         val = self->buffer[ipart] + (self->buffer[ipart + 1] - self->buffer[ipart]) * fpart;
         self->data[i] += (val * amp);
 
         self->pointerPos += inc;
 
-        if (self->pointerPos < 0)
+        if (self->pointerPos < 0) {
             self->pointerPos += 1.0;
-        else if (self->pointerPos >= 1)
+            if (input_pitch[i] > 20.0) {
+                window_offset_greater = (ceil(self->winsize*input_pitch[i]) / input_pitch[i]); // nearest multiple of pitch period that is greater than winsize
+                window_offset_smaller= (floor(self->winsize*input_pitch[i]) / input_pitch[i]); // nearest multiple of pitch period that is smaller than winsize
+                self->prev_winsize1 = self->winsize1;
+                self->samples_since_winsize1_changed = 0;
+                if (fabs((double)(self->winsize2 - window_offset_smaller)) <  fabs((double)(self->winsize2 - window_offset_greater))) {
+                    self->target_winsize1 = window_offset_smaller;
+                }
+                else {
+                    self->target_winsize1 = window_offset_greater;
+                }
+            }
+        }
+        else if (self->pointerPos >= 1) { // decreasing pitch
             self->pointerPos -= 1.0;
+            if (input_pitch[i] > 20.0) {
+                window_offset_greater = (ceil(self->winsize*input_pitch[i]) / input_pitch[i]); // offset to  the nearest pitch-perfect window size that is greater than winsize
+                window_offset_smaller= (floor(self->winsize*input_pitch[i]) / input_pitch[i]); // offset to  the nearest pitch-perfect window size that is smaller than winsize
+                self->prev_winsize1 = self->winsize1;
+                self->samples_since_winsize1_changed = 0;
+                if (fabs((double)(self->winsize2 - window_offset_smaller)) <  fabs((double)(self->winsize2 - window_offset_greater))) {
+                    self->target_winsize1 = window_offset_smaller;
+                }
+                else {
+                    self->target_winsize1 = window_offset_greater;
+                }
+            }
+        }
 
         self->y1 = self->data[i] - self->x1 + 0.995 * self->y1;
         self->x1 = self->data[i];
@@ -215,6 +281,9 @@ Harmonizer_transform_ai(Harmonizer *self)
 
         if (self->in_count >= self->sr)
             self->in_count = 0;
+
+        self->samples_since_winsize1_changed++;
+        self->samples_since_winsize2_changed++;
     }
 }
 
@@ -514,12 +583,13 @@ Harmonizer_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {
     int i;
     MYFLT wintmp;
-    PyObject *inputtmp, *input_streamtmp, *transpotmp = NULL, *feedbacktmp = NULL, *multmp = NULL, *addtmp = NULL;
+    PyObject *inputtmp, *input_streamtmp, *transpotmp = NULL, *input_pitchtmp = NULL ,*feedbacktmp = NULL, *multmp = NULL, *addtmp = NULL;
     Harmonizer *self;
     self = (Harmonizer *)type->tp_alloc(type, 0);
 
     self->transpo = PyFloat_FromDouble(-7.0);
     self->feedback = PyFloat_FromDouble(0.0);
+    self->input_pitch = PyFloat_FromDouble(440.0);
     self->winsize = 0.1;
     self->pointerPos = 1.0;
     self->in_count = 0;
@@ -528,14 +598,17 @@ Harmonizer_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
     self->modebuffer[1] = 0;
     self->modebuffer[2] = 0;
     self->modebuffer[3] = 0;
+    self-> second_overlap_hit = -1;
+    self->samples_since_winsize1_changed = 0;
+    self->samples_since_winsize2_changed = 0;
 
     INIT_OBJECT_COMMON
     Stream_setFunctionPtr(self->stream, Harmonizer_compute_next_data_frame);
     self->mode_func_ptr = Harmonizer_setProcMode;
 
-    static char *kwlist[] = {"input", "transpo", "feedback", "winsize", "mul", "add", NULL};
+    static char *kwlist[] = {"input", "transpo", "input_pitch", "feedback", "winsize", "mul", "add", NULL};
 
-    if (! PyArg_ParseTupleAndKeywords(args, kwds, TYPE_O_OOFOO, kwlist, &inputtmp, &transpotmp, &feedbacktmp, &wintmp, &multmp, &addtmp))
+    if (! PyArg_ParseTupleAndKeywords(args, kwds, TYPE_O_OOOFOO, kwlist, &inputtmp, &transpotmp, &input_pitchtmp, &feedbacktmp, &wintmp, &multmp, &addtmp))
         Py_RETURN_NONE;
 
     INIT_INPUT_STREAM
@@ -544,6 +617,12 @@ Harmonizer_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
     {
         PyObject_CallMethod((PyObject *)self, "setTranspo", "O", transpotmp);
     }
+    //PySys_WriteStdout("Harmonizer : before parsing input_pitchtmp.\n");
+    if (input_pitchtmp)
+    {
+        PyObject_CallMethod((PyObject *)self, "setInputPitch", "O", input_pitchtmp);
+    }
+    //PySys_WriteStdout("Harmonizer : after parsing input_pitchtmp.\n");
 
     if (feedbacktmp)
     {
@@ -573,6 +652,13 @@ Harmonizer_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
         self->winsize = wintmp;
     else
         PySys_WriteStdout("Harmonizer : winsize lower than 0.0 or larger than 1.0 second, keeping default value.\n");
+
+    self->winsize1= self->winsize;
+    self->winsize2 = self->winsize;
+    self->prev_winsize1= self->winsize;
+    self->prev_winsize2 = self->winsize;
+    self->target_winsize1 = self->winsize;
+    self->target_winsize2 = self->winsize;
 
     (*self->mode_func_ptr)(self);
 
@@ -647,6 +733,34 @@ Harmonizer_setTranspo(Harmonizer *self, PyObject *arg)
 }
 
 static PyObject *
+Harmonizer_setInputPitch(Harmonizer *self, PyObject *arg)
+{
+    PyObject *tmp, *streamtmp;
+
+    ASSERT_ARG_NOT_NULL
+
+    int isNumber = PyNumber_Check(arg);
+
+    tmp = arg;
+    Py_INCREF(tmp);
+    Py_DECREF(self->input_pitch);
+
+    if (!(isNumber == 1))
+    {
+        self->input_pitch = tmp;
+        streamtmp = PyObject_CallMethod((PyObject *)self->input_pitch, "_getStream", NULL);
+        Py_INCREF(streamtmp);
+        Py_XDECREF(self->input_pitch_stream);
+        self->input_pitch_stream = (Stream *)streamtmp;
+    }
+
+    (*self->mode_func_ptr)(self);
+
+    Py_INCREF(Py_None);
+    return Py_None;
+}
+
+static PyObject *
 Harmonizer_setFeedback(Harmonizer *self, PyObject *arg)
 {
     PyObject *tmp, *streamtmp;
@@ -709,6 +823,7 @@ static PyMemberDef Harmonizer_members[] =
     {"stream", T_OBJECT_EX, offsetof(Harmonizer, stream), 0, "Stream object."},
     {"input", T_OBJECT_EX, offsetof(Harmonizer, input), 0, "Input sound object."},
     {"transpo", T_OBJECT_EX, offsetof(Harmonizer, transpo), 0, "Transposition factor."},
+    {"input_pitch", T_OBJECT_EX, offsetof(Harmonizer, input_pitch), 0, "Input pitch."},
     {"feedback", T_OBJECT_EX, offsetof(Harmonizer, feedback), 0, "Feedback factor."},
     {"mul", T_OBJECT_EX, offsetof(Harmonizer, mul), 0, "Mul factor."},
     {"add", T_OBJECT_EX, offsetof(Harmonizer, add), 0, "Add factor."},
@@ -724,6 +839,7 @@ static PyMethodDef Harmonizer_methods[] =
     {"stop", (PyCFunction)Harmonizer_stop, METH_VARARGS | METH_KEYWORDS, "Stops computing."},
     {"reset", (PyCFunction)Harmonizer_reset, METH_NOARGS, "Reset the delay line."},
     {"setTranspo", (PyCFunction)Harmonizer_setTranspo, METH_O, "Sets global transpo factor."},
+    {"setInputPitch", (PyCFunction)Harmonizer_setInputPitch, METH_O, "Sets input pitch."},
     {"setFeedback", (PyCFunction)Harmonizer_setFeedback, METH_O, "Sets feedback factor."},
     {"setWinsize", (PyCFunction)Harmonizer_setWinsize, METH_O, "Sets the window size."},
     {"setMul", (PyCFunction)Harmonizer_setMul, METH_O, "Sets granulator mul factor."},

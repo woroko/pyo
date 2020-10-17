@@ -1362,20 +1362,21 @@ class Harmonizer(PyoObject):
 
     """
 
-    def __init__(self, input, transpo=-7.0, feedback=0, winsize=0.1, mul=1, add=0):
-        pyoArgsAssert(self, "oOOnOO", input, transpo, feedback, winsize, mul, add)
+    def __init__(self, input, transpo=-7.0, input_pitch=440.0, feedback=0, winsize=0.1, mul=1, add=0):
+        pyoArgsAssert(self, "oOOOnOO", input, transpo, input_pitch, feedback, winsize, mul, add)
         PyoObject.__init__(self, mul, add)
         self._input = input
         self._transpo = transpo
+        self._input_pitch = input_pitch
         self._feedback = feedback
         self._winsize = winsize
         self._in_fader = InputFader(input)
-        in_fader, transpo, feedback, winsize, mul, add, lmax = convertArgsToLists(
-            self._in_fader, transpo, feedback, winsize, mul, add
+        in_fader, transpo, input_pitch, feedback, winsize, mul, add, lmax = convertArgsToLists(
+            self._in_fader, transpo, input_pitch, feedback, winsize, mul, add
         )
         self._base_objs = [
             Harmonizer_base(
-                wrap(in_fader, i), wrap(transpo, i), wrap(feedback, i), wrap(winsize, i), wrap(mul, i), wrap(add, i)
+                wrap(in_fader, i), wrap(transpo, i), wrap(input_pitch, i), wrap(feedback, i), wrap(winsize, i), wrap(mul, i), wrap(add, i)
             )
             for i in range(lmax)
         ]
@@ -1411,6 +1412,21 @@ class Harmonizer(PyoObject):
         self._transpo = x
         x, lmax = convertArgsToLists(x)
         [obj.setTranspo(wrap(x, i)) for i, obj in enumerate(self._base_objs)]
+
+    def setInputPitch(self, x):
+        """
+        Replace the `input_pitch` attribute.
+
+        :Args:
+
+            x: PyoObject
+                New `input_pitch` attribute.
+
+        """
+        pyoArgsAssert(self, "O", x)
+        self._input_pitch = x
+        x, lmax = convertArgsToLists(x)
+        [obj.setInputPitch(wrap(x, i)) for i, obj in enumerate(self._base_objs)]
 
     def setFeedback(self, x):
         """
@@ -1475,6 +1491,15 @@ class Harmonizer(PyoObject):
     @transpo.setter
     def transpo(self, x):
         self.setTranspo(x)
+
+    @property
+    def input_pitch(self):
+        """PyoObject. Input pitch in Hz."""
+        return self._input_pitch
+
+    @transpo.setter
+    def input_pitch(self, x):
+        self.setInputPitch(x)
 
     @property
     def feedback(self):
