@@ -1358,10 +1358,13 @@ quadraticInterpolation(MYFLT *buf, int period, int size)
 /* Yin */
 /************/
 #define PITCH_TRUSTED 2
-#define JUMP_REJECTED 3
+#define JUMP_REJECTED 2
 #define OCTAVE_REJECTED 5
 inline int min(int a, int b) {
     return a < b ? a : b;
+}
+inline int max(int a, int b) {
+    return a > b ? a : b;
 }
 typedef struct
 {
@@ -1469,12 +1472,15 @@ founded:
                     self->pitch = candidate;
                     self->error_rejected_count = 0;
                     self->jump_rejected_count = 0;
-                    self->pitch_trusted_count = min(PITCH_TRUSTED+100, self->pitch_trusted_count + 1);
+                    self->pitch_trusted_count = min(PITCH_TRUSTED+2, self->pitch_trusted_count + 1);
                 }
 
                 if (self->error_rejected_count >= OCTAVE_REJECTED || self->jump_rejected_count >= JUMP_REJECTED) {  // pitch will be set next time
                     self->pitch_trusted_count = 0;
                 }
+            }
+            else {  // did not find suitable candidate, lower pitch confidence
+                self ->pitch_trusted_count = max(0, self->pitch_trusted_count - 1);
             }
 
         }
