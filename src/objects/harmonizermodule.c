@@ -49,6 +49,11 @@ typedef struct
     MYFLT prev_winsize2;
     MYFLT target_winsize1;
     MYFLT target_winsize2;
+    // second-order ButLP
+    MYFLT piOnSr;
+    MYFLT sqrt2;
+    MYFLT nyquist;
+    MYFLT lpa0, lpa1, lpa2, lpb1, lpb2, lpx1, lpx2, lpy1, lpy2;
     int samples_since_winsize1_changed;
     int samples_since_winsize2_changed;
     int second_overlap_hit;
@@ -146,8 +151,9 @@ Harmonizer_transform_ii(Harmonizer *self)
 static void
 Harmonizer_transform_ai(Harmonizer *self)
 {
-    MYFLT val, amp, inc, ratio, rate, del, xind1, xind2, pos, envpos, fpart, window_offset_greater, window_offset_smaller, window_offset;
+    MYFLT val, amp, inc, ratio, rate, del, xind1, xind2, pos, envpos, fpart, window_offset_greater, window_offset_smaller;
     int i, ipart;
+    MYFLT lpval, fr, c, c2; // ButLP
 
     MYFLT *in = Stream_getData((Stream *)self->input_stream);
     MYFLT *trans = Stream_getData((Stream *)self->transpo_stream);
@@ -164,6 +170,7 @@ Harmonizer_transform_ai(Harmonizer *self)
     MYFLT winsizeFactor;
     for (i = 0; i < self->bufsize; i++)
     {
+        // smooth interpolation from previous to target winsize
         winsizeFactor = ((self->samples_since_winsize1_changed / self->sr) / self->winsize) * 0.5;
         winsizeFactor = winsizeFactor > 1.0 ? 1.0 : winsizeFactor;
         self->winsize1 =  self->target_winsize1 * winsizeFactor + (1.0-winsizeFactor) * self->prev_winsize1;
@@ -171,6 +178,7 @@ Harmonizer_transform_ai(Harmonizer *self)
         winsizeFactor = winsizeFactor > 1.0 ? 1.0 : winsizeFactor;
         self->winsize2 =  self->target_winsize2 * winsizeFactor + (1.0-winsizeFactor) * self->prev_winsize2;
 
+        // average playback ratio considering both overlaps
         oneOnWinsize = ((1.0 / self->winsize1) + (1.0 / self->winsize2)) / 2.0;
         ratio = MYPOW(2.0, trans[i] / 12.0);
         rate = (ratio - 1.0) * oneOnWinsize;
@@ -272,7 +280,32 @@ Harmonizer_transform_ai(Harmonizer *self)
         self->y1 = self->data[i] - self->x1 + 0.995 * self->y1;
         self->x1 = self->data[i];
 
-        self->buffer[self->in_count] = in[i]  + self->y1 * feed;
+        //self->buffer[self->in_count] = in[i]  + self->y1 * feed;
+        MYFLT ready_input = in[i]  + self->y1 * feed;
+
+        // second-order ButLP
+        // reduces aliasing from skipped samples when pitch shifting upwards
+        fr = ((MYFLT)self->sr*0.5*0.8)/ratio; // cutoff frequency
+
+        if (fr < 10.)
+            fr = 10.;
+        else if (fr >= self->nyquist || ratio <= 1.0)
+            fr = self->nyquist;
+
+        c = 1.0 / MYTAN(self->piOnSr * fr);
+        c2 = c * c;
+        self->lpa0 = self->lpa2 = 1.0 / (1.0 + self->sqrt2 * c + c2);
+        self->lpa1 = 2.0 * self->lpa0;
+        self->lpb1 = self->lpa1 * (1.0 - c2);
+        self->lpb2 = self->lpa0 * (1.0 - self->sqrt2 * c + c2);
+
+        lpval = self->lpa0 * ready_input + self->lpa1 * self->lpx1 + self->lpa2 * self->lpx2 - self->lpb1 * self->lpy1 - self->lpb2 * self->lpy2;
+        self->lpx2 = self->lpx1;
+        self->lpx1 = ready_input;
+        self->lpy2 = self->lpy1;
+        self->lpy1 = lpval;
+        self->buffer[self->in_count] = lpval;
+        // ButLP end
 
         if (self->in_count == 0)
             self->buffer[(int)self->sr] = self->buffer[0];
@@ -659,6 +692,11 @@ Harmonizer_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
     self->prev_winsize2 = self->winsize;
     self->target_winsize1 = self->winsize;
     self->target_winsize2 = self->winsize;
+
+    self->piOnSr = PI / (MYFLT)self->sr;
+    self->sqrt2 = MYSQRT(2.0);
+    self->lpx1 = self->lpx2 = self->lpy1 = self->lpy2 = self->lpa0 = self->lpa1 = self->lpa2 = self->lpb1 = self->lpb2 = 0.0;
+    self->nyquist = (MYFLT)self->sr * 0.49;
 
     (*self->mode_func_ptr)(self);
 

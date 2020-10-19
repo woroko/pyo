@@ -127,7 +127,7 @@ if "--fast-compile" in sys.argv:
     sys.argv.remove("--fast-compile")
     oflag = ["-O0"]
 else:
-    oflag = ["-O3", "-march=native", "-mtune=native", "-ffast-math"] #, "-fopt-info-vec-optimized"]
+    oflag = ["-O3", "-march=native", "-mtune=native", "-ffast-math", "-flto"] #, "-fopt-info-vec-optimized"]
 
 # Specific audio drivers source files to compile
 ad_files = []
